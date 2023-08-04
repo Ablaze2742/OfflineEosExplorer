@@ -210,6 +210,9 @@ class AppWindow(QtWidgets.QMainWindow):
 
     def loadTeases(self, searchDir, testFile = "config.ini") -> dict:
         teases = dict()
+        if not os.path.exists(searchDir):
+            os.makedirs(searchDir)
+            return teases
         for file in os.listdir(searchDir):
             if os.path.isdir(rootDir := os.path.join(searchDir, file)) and testFile in os.listdir(rootDir):
                 teases[rootDir] = TeaseCard(self, rootDir)
@@ -341,9 +344,9 @@ class TeaseCard(QtWidgets.QWidget):
             # Really wish we had streams right now
             if imgLocator.startswith("gallery:"):
                 galId, imgId = imgLocator[len("gallery:"):].split("/", 1)
-                imgId = int(imgId)
                 for i in self.eosscript["galleries"][galId]["images"]:
-                    if i["id"] == imgId:
+                    # Using str() instead of int() to help prevent errors
+                    if str(i["id"]) == imgId or imgId == "*":
                         imgHash = i["hash"]
                         break
                 else:
@@ -546,6 +549,8 @@ class DownloadTeasePopup(QtWidgets.QDialog):
         for rootDir, config in self.downloadedTeases:
             logging.debug(f"Creating tease card for {rootDir}.")
             teaseCard = TeaseCard(self.creator, rootDir, configOverride = config)
+            # Save config.ini last so that if an error occurred while
+            # downloading, the tease won't load on the next startup.
             teaseCard.saveSettings()
             self.creator.addTeaseToList(rootDir, teaseCard)
         self.downloadedTeases.clear()
@@ -694,6 +699,8 @@ def unhideTimers(eosscript):
     elif isinstance(eosscript, dict):
         if "timer" in eosscript and "style" in eosscript["timer"]:
             del eosscript["timer"]["style"]
+        if "nyx.timer" in eosscript and "style" in eosscript["nyx.timer"]:
+            del eosscript["nyx.timer"]["style"]
         for i in eosscript.values():
             unhideTimers(i)
 
