@@ -1,3 +1,3 @@
 #!/bin/bash
 source .venv/bin/activate
-python3 app.py &> debug.log
+python3 scripts/app.py &> debug.log
