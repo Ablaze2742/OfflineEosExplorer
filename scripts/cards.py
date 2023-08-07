@@ -1,197 +1,205 @@
 from __future__ import annotations
 
-import configparser
 import json
 import logging
 import os
+import typing
 
 from bs4 import BeautifulSoup
+from configparser import ConfigParser
 from io import StringIO
 from PyQt6 import QtGui, QtWidgets
 
 import english as lang
 
-from app import AppWindow  # Just for type hinting
+from app import AppWindow
 from constants import *
 
 class TeaseCard(QtWidgets.QWidget):
-    # creator: The object that created the widget. Its antithesis is self.windows.
-    def __init__(self, creator: AppWindow, rootDir, defaultTeaseId, configOverride, SettingsPopupType: TeaseSettingsPopup):
-        logging.debug(f"Creating tease card for {rootDir}.")
+    MY_FANCY_NAME = "Generic Tease Card"
+    DEFAULT_THUMB = DEFAULT_THUMB_PATH
+
+    def __init__(self, creator: AppWindow, rootDir: os.PathLike):
+        logging.debug(f"Creating tease card of type {type(self)} with {rootDir=}")
         super().__init__(creator)
         palette = self.palette()
         palette.setColor(self.backgroundRole(), palette.color(QtGui.QPalette.ColorRole.Highlight))
         self.setPalette(palette)
-        # self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
-        # https://stackoverflow.com/questions/44094293/pyqt-widget-seems-to-forget-its-parent
         self.creator = creator
         self.rootDir = rootDir
-        self.config = self.loadConfig() if configOverride is None else configOverride
+        self.config: ConfigParser = self._loadConfig()
         if "tease_id" not in self.config["General"]:
-            self.config["General"]["tease_id"] = defaultTeaseId
+            self.config["General"]["tease_id"] = "unset"
 
-        self.settingsPopup = SettingsPopupType(self)
-        
-        layout = QtWidgets.QHBoxLayout()
-        
-        self.image = QtWidgets.QLabel(self)
-        layout.addWidget(self.image)
+        self.settingsPopup: TeaseSettingsPopup = None
 
-        metaSubLayout = QtWidgets.QVBoxLayout()
-        # metaSubLayoutDefaultMargins = metaSubLayout.getContentsMargins()
-        # metaSubLayout.setContentsMargins(12, metaSubLayoutDefaultMargins[1], 24, metaSubLayoutDefaultMargins[3])
+        self.thumbnail = QtWidgets.QLabel(self)
+        self.thumbnail.setPixmap(self.getDefaultThumbnail())
 
-        metaSubLayout.addStretch()
-
-        self.titleMeta = QtWidgets.QLabel(self)
-        titleFont = self.titleMeta.font()
+        self.teaseTitle = QtWidgets.QLabel(self)
+        titleFont = self.teaseTitle.font()
         titleFont.setPointSize(14)
-        self.titleMeta.setFont(titleFont)
-        metaSubLayout.addWidget(self.titleMeta)
+        self.teaseTitle.setFont(titleFont)
 
-        self.authorMeta = QtWidgets.QLabel(self)
-        authorFont = self.authorMeta.font()
+        self.teaseAuthor = QtWidgets.QLabel(self)
+        authorFont = self.teaseAuthor.font()
         authorFont.setPointSize(11)
-        self.authorMeta.setFont(authorFont)
-        metaSubLayout.addWidget(self.authorMeta)
+        self.teaseAuthor.setFont(authorFont)
 
-        self.teaseIdMeta = QtWidgets.QLabel(self)
-        teaseIdFont = self.teaseIdMeta.font()
-        teaseIdFont.setPointSize(8)
-        teaseIdFont.setItalic(True)
-        self.teaseIdMeta.setFont(teaseIdFont)
-        metaSubLayout.addWidget(self.teaseIdMeta)
+        self.extraInfo = QtWidgets.QLabel(self)
+        extraInfoFont = self.extraInfo.font()
+        extraInfoFont.setPointSize(9)
+        extraInfoFont.setItalic(True)
+        self.extraInfo.setFont(extraInfoFont)
 
-        metaSubLayout.addStretch()
+        metadataSubLayout = QtWidgets.QVBoxLayout()
+        metadataSubLayout.addWidget(self.teaseTitle)
+        metadataSubLayout.addWidget(self.teaseAuthor)
+        metadataSubLayout.addWidget(self.extraInfo)
+        metadataSubLayout.addStretch(1)
 
-        layout.addLayout(metaSubLayout)
-
+        layout = QtWidgets.QHBoxLayout()
+        layout.addWidget(self.thumbnail)
+        layout.addLayout(metadataSubLayout)
         layout.addStretch()
 
         self.refreshMetadata()
-        
+
         self.setLayout(layout)
     
-    def loadThumbnail(self, defaultThumb):
-        thumbnail = thumb if (thumb := self.getThumbnail()) is not None else QtGui.QPixmap(defaultThumb)
-        dim = min(thumbnail.width(), thumbnail.height())
-        thumbnail = thumbnail.copy(
-            (thumbnail.width() - dim) // 2,  # top left x
-            (thumbnail.height() - dim) // 2,  # top left y
-            dim, dim)  # width, height
-        self.image.setPixmap(thumbnail.scaledToHeight(80))
-
+    def _saveConfig(self):
+        with open(os.path.join(self.rootDir, "config.ini"), "w") as f:
+            self.saveConfig(self.config, f)
+    
+    def _loadConfig(self) -> ConfigParser:
+        with open(os.path.join(self.rootDir, "config.ini")) as f:
+            return self.loadConfig(f)
+    
+    def saveSettings(self):
+        self._saveConfig()
+        self.refreshMetadata()
+    
     def refreshMetadata(self):
-        self.titleMeta.setText(self.config["General"]["title"])
-        self.authorMeta.setText(self.config["General"]["author"])
-        self.teaseIdMeta.setText(f"ID: {self.config['General']['tease_id']}")
+        self.teaseTitle.setText(self.config["General"]["title"])
+        self.teaseAuthor.setText(self.config["General"]["author"])
+        self.extraInfo.setText(" | ".join([self.config["General"]["tease_id"], self.MY_FANCY_NAME]))
     
-    def saveConfig(self):
-        with StringIO() as iniHack:
-            self.config.write(iniHack, False)
-            configStr = iniHack.getvalue()
-        configStr = configStr.replace("[General]\n", "")
-        with open(os.path.join(self.rootDir, "config.ini"), "w") as iniFile:
-            iniFile.write(configStr)
-    
-    def loadConfig(self):
-        config = configparser.ConfigParser()
-        # Hack because eos.outer.js can't handle sectioned files
-        configStr = "[General]\n"
-        with open(os.path.join(self.rootDir, "config.ini")) as iniFile:
-            configStr += iniFile.read()
-        config.read_string(configStr)
-        return config
+    def getThumbnail(self) -> QtGui.QPixmap | None:
+        return self.getDefaultThumbnail()
     
     def mousePressEvent(self, event):
         self.creator.setSelectedTease(self)
         return super().mousePressEvent(event)
     
-    def showSettingsPopup(self):
-        self.settingsPopup.refreshSettings()
-        self.settingsPopup.show()
-    
-    def saveSettings(self):
-        raise NotImplementedError
-    
-    def getThumbnail(self):
-        raise NotImplementedError
+    # Workaround for "QPixmap: Must construct a QGuiApplication before a QPixmap"
+    @classmethod
+    def getDefaultThumbnail(cls) -> QtGui.QPixmap:
+        if type(cls.DEFAULT_THUMB) is not QtGui.QPixmap:
+            logging.debug("Creating default thumbnail")
+            cls.DEFAULT_THUMB = cls.cropThumbnail(QtGui.QPixmap(cls.DEFAULT_THUMB))
+        return cls.DEFAULT_THUMB
 
+    @staticmethod
+    def cropThumbnail(thumbnail: QtGui.QPixmap) -> QtGui.QPixmap:
+        dim = min(thumbnail.width(), thumbnail.height())
+        if dim == 0:
+            return thumbnail
+        return thumbnail.copy(
+            (thumbnail.width() - dim) // 2,  # top left x
+            (thumbnail.height() - dim) // 2,  # top left y
+            dim, dim  # width, height
+        ).scaledToHeight(80)
+
+    @staticmethod
+    def saveConfig(config: ConfigParser, file: typing.TextIO):
+        # eos.outer.js doesn't support .ini files with sections
+        with StringIO() as configgy:
+            config.write(configgy, False)
+            config = configgy.getvalue()
+        config = config.lstrip("[General]\n")
+        file.write(config)
+    
+    @staticmethod
+    def loadConfig(file: typing.TextIO) -> ConfigParser:
+        # eos.outer.js doesn't support .ini files with sections
+        configgy = file.read()
+        configgy = "[General]\n" + configgy
+        config = ConfigParser()
+        config.read_string(configgy)
+        return config
+    
 class TeaseSettingsPopup(QtWidgets.QDialog):
-    def __init__(self, creator: TeaseCard, layout: QtWidgets.QGridLayout):
+    def __init__(self, creator: TeaseCard):
         super().__init__(creator)
-        self.setWindowTitle(f"{lang.teaseSettings}: {creator.config['General']['title']}")
         self.setMinimumWidth(4 * WINDOW_SIZE)
         self.setModal(True)
         self.creator = creator
 
-        titleTextBoxHint = QtWidgets.QLabel(self)
-        titleTextBoxHint.setText(lang.titleTextBoxHint)
-        layout.addWidget(titleTextBoxHint, 0, 0)
+        self.layout_ = QtWidgets.QGridLayout(self)
+        self.setLayout(self.layout_)
+        
+        teaseTitleHint = QtWidgets.QLabel(lang.titleTextBoxHint, self)
+        self.teaseTitleEdit = QtWidgets.QLineEdit(self)
 
-        self.titleTextBox = QtWidgets.QLineEdit(self)
-        layout.addWidget(self.titleTextBox, 0, 1)
+        teaseAuthorHint = QtWidgets.QLabel(lang.authorTextBoxHint, self)
+        self.teaseAuthorEdit = QtWidgets.QLineEdit(self)
 
-        authorTextBoxHint = QtWidgets.QLabel(self)
-        authorTextBoxHint.setText(lang.authorTextBoxHint)
-        layout.addWidget(authorTextBoxHint, 1, 0)
+        teaseIdHint = QtWidgets.QLabel(lang.teaseIdTextBoxHint, self)
+        self.teaseIdEdit = QtWidgets.QLineEdit(self)
 
-        self.authorTextBox = QtWidgets.QLineEdit(self)
-        layout.addWidget(self.authorTextBox, 1, 1)
-
-        teaseIdTextBoxHint = QtWidgets.QLabel(self)
-        teaseIdTextBoxHint.setText(lang.teaseIdTextBoxHint)
-        layout.addWidget(teaseIdTextBoxHint, 2, 0)
-
-        self.teaseIdTextBox = QtWidgets.QLineEdit(self)
-        layout.addWidget(self.teaseIdTextBox, 2, 1)
-    
-    def refreshSettings(self):
-        self.titleTextBox.setText(self.creator.config["General"]["title"])
-        self.authorTextBox.setText(self.creator.config["General"]["author"])
-        self.teaseIdTextBox.setText(self.creator.config["General"]["tease_id"])
-        self._refreshSettings()
+        saveSettingsButton = QtWidgets.QPushButton(lang.saveSettings, self)
+        saveSettingsButton.clicked.connect(self.saveSettings)
+        self.layout_.addWidget(teaseTitleHint, 0, 0)
+        self.layout_.addWidget(self.teaseTitleEdit, 0, 1)
+        self.layout_.addWidget(teaseAuthorHint, 1, 0)
+        self.layout_.addWidget(self.teaseAuthorEdit, 1, 1)
+        self.layout_.addWidget(teaseIdHint, 2, 0)
+        self.layout_.addWidget(self.teaseIdEdit, 2, 1)
+        # Hack
+        self.layout_.addWidget(saveSettingsButton, 10, 0, 1, 2)
     
     def saveSettings(self):
-        self.creator.config["General"]["title"] = self.titleTextBox.text()
-        self.creator.config["General"]["author"] = self.authorTextBox.text()
-        self.creator.config["General"]["tease_id"] = self.teaseIdTextBox.text()
-        self._saveSettings()
+        self.creator.config["General"]["title"] = self.teaseTitleEdit.text()
+        self.creator.config["General"]["author"] = self.teaseAuthorEdit.text()
+        self.creator.config["General"]["tease_id"] = self.teaseIdEdit.text()
         self.creator.saveSettings()
         self.hide()
 
-    def _refreshSettings(self):
-        raise NotImplementedError
-
-    def _saveSettings(self):
-        raise NotImplementedError
+    def refreshSettings(self):
+        self.teaseTitleEdit.setText(self.creator.config["General"]["title"])
+        self.teaseAuthorEdit.setText(self.creator.config["General"]["author"])
+        self.teaseIdEdit.setText(self.creator.config["General"]["tease_id"])
+        self.setWindowTitle(f"{lang.teaseSettings}: {self.creator.config['General']['title']}")
 
 class EosTeaseCard(TeaseCard):
-    def __init__(self, creator, rootDir, defaultTeaseId = "unset", defaultThumb = DEFAULT_THUMB, configOverride=None):
-        super().__init__(creator, rootDir, defaultTeaseId, configOverride, EosTeaseSettingsPopup)
+    MY_FANCY_NAME = "EOS Tease Card"
+
+    def __init__(self, creator: AppWindow, rootDir: os.PathLike):
+        super().__init__(creator, rootDir)
         if "unhide_timers" not in self.config["General"]:
             self.config["General"]["unhide_timers"] = "false"
 
+        self.settingsPopup = EosTeaseSettingsPopup(self)
         self.eosscript = self.loadEosscript()
-        self.loadThumbnail(defaultThumb)
+        if (thumbnail := self.getThumbnail()) is not None:
+            self.thumbnail.setPixmap(thumbnail)
     
     def saveSettings(self):
-        self.saveConfig()
+        super().saveSettings()
         self.eosscript = self.loadEosscript()
         logging.debug(f"Reloaded eosscript for {self.rootDir} with {self.config['General']['unhide_timers']=}")
-        self.refreshMetadata()
     
-    def loadEosscript(self):
-        with open(os.path.join(self.rootDir, "eosscript.json")) as jFile:
-            eosscript = json.load(jFile)
-        if self.config["General"]["unhide_timers"] == "true":
-            self.unhideTimers(eosscript)
+    def loadEosscript(self) -> typing.Any:
+        with open(os.path.join(self.rootDir, "eosscript.json")) as f:
+            eosscript = json.load(f)
+        if self.config["General"].getboolean("unhide_timers"):
+            logging.debug(f"Hiding timers for {self.rootDir}")
+            self.removeTags(("nyx.timer/style", "timer/style"), eosscript)
         return eosscript
     
-    def getThumbnail(self):
+    def getThumbnail(self) -> QtGui.QPixmap | None:
         imgHash = None
-        if (imgLocator := self.findFirstImage()) is not None:
-            # Really wish we had streams right now
+        if (imgLocator := self.findFirstImage(self.eosscript["pages"]["start"])) is not None:
             if imgLocator.startswith("gallery:"):
                 galId, imgId = imgLocator[len("gallery:"):].split("/", 1)
                 for i in self.eosscript["galleries"][galId]["images"]:
@@ -205,112 +213,95 @@ class EosTeaseCard(TeaseCard):
                 imgHash = self.eosscript["files"][imgLocator[len("file:"):]]["hash"]
         else:
             logging.warning(f"Could not find thumbnail in eosscript for {self.rootDir}")
+        
+        if imgHash is None:
+            logging.warning(f"Unknown image locator: {imgLocator}")
+            return None
 
-        thumbnail = None
-        if imgHash is not None:
-            for img in os.listdir(imgDir := os.path.join(self.rootDir, "timg", "tb_xl")):
-                if img.startswith(imgHash):
-                    thumbnail = QtGui.QPixmap(os.path.join(imgDir, img))
-                    logging.debug(os.path.join(imgDir, img))
-                    break
-            else:
-                logging.warning(f"Could not find thumbnail in media for {self.rootDir}")
-        else:
-            logging.warning(f"No image extractor for image locator {imgLocator}")
-        
-        return thumbnail
-    
-    def findFirstImage(self, eosFrag=None) -> str | None:
-        if eosFrag is None:
-            return self.findFirstImage(self.eosscript["pages"]["start"])
-        
-        if isinstance(eosFrag, list):
-            for f in eosFrag:
-                if (res := self.findFirstImage(f)) is not None:
-                    return res
-        elif isinstance(eosFrag, dict):
-            if "image" in eosFrag:
-                return eosFrag["image"]["locator"]
-            elif "media" in eosFrag:
-                return eosFrag["media"]["nyx.image"]
-            else:
-                for f in eosFrag.values():
-                    if (res := self.findFirstImage(f)) is not None:
-                        return res
+        for img in os.listdir(imgDir := os.path.join(self.rootDir, "timg", "tb_xl")):
+            if img.startswith(imgHash):
+                return self.cropThumbnail(QtGui.QPixmap(os.path.join(imgDir, img)))
+
+        logging.warning(f"Could not find thumbnail in media for {self.rootDir}")
         return None
     
-    def unhideTimers(self, eosFrag):
-        if isinstance(eosFrag, list):
-            for f in eosFrag:
-                self.unhideTimers(f)
-        elif isinstance(eosFrag, dict):
-            if "timer" in eosFrag and "style" in eosFrag["timer"]:
-                del eosFrag["timer"]["style"]
-            if "nyx.timer" in eosFrag and "style" in eosFrag["nyx.timer"]:
-                del eosFrag["nyx.timer"]["style"]
-            for f in eosFrag.values():
-                self.unhideTimers(f)
+    @classmethod
+    def findFirstImage(cls, eosFrag) -> str | None:
+        if isinstance(eosFrag, dict):
+            if "image" in eosFrag:
+                return eosFrag["image"]["locator"]
+            elif "media" in eosFrag and "nyx.image" in eosFrag["media"]:
+                return eosFrag["media"]["nyx.image"]
+            for frag in eosFrag.values():
+                if (res := cls.findFirstImage(frag)) is not None:
+                    return res
+        elif isinstance(eosFrag, list):
+            for frag in eosFrag:
+                if (res := cls.findFirstImage(frag)) is not None:
+                    return res
+        return None
+
+    @classmethod
+    def removeTags(cls, tags: tuple[str], eosFrag):
+        if isinstance(eosFrag, dict):
+            for tag in tags:
+                path = tag.split("/")
+                tmp = eosFrag
+                for key in path[:-1]:
+                    if key in tmp:
+                        tmp = tmp[key]
+                    else:
+                        break
+                else:
+                    if path[-1] in tmp:
+                        del tmp[path[-1]]
+            for frag in eosFrag.values():
+                cls.removeTags(tags, frag)
+        elif isinstance(eosFrag, list):
+            for frag in eosFrag:
+                cls.removeTags(tags, frag)
 
 class EosTeaseSettingsPopup(TeaseSettingsPopup):
     def __init__(self, creator: EosTeaseCard):
-        layout = QtWidgets.QGridLayout()
-        super().__init__(creator, layout)
+        super().__init__(creator)
 
-        self.unhideTimersButton = QtWidgets.QCheckBox(self)
-        self.unhideTimersButton.setText(lang.unhideTimers)
-        layout.addWidget(self.unhideTimersButton, 3, 0, 1, 2)
+        self.unhideTimersButton = QtWidgets.QCheckBox(lang.unhideTimers, self)
+        self.layout_.addWidget(self.unhideTimersButton, 3, 0, 1, 2)
 
-        self.debugModeButton = QtWidgets.QCheckBox(self)
-        self.debugModeButton.setText(lang.debugMode)
-        layout.addWidget(self.debugModeButton, 4, 0, 1, 2)
-        
-        saveButton = QtWidgets.QPushButton(self)
-        saveButton.setText(lang.saveSettings)
-        saveButton.clicked.connect(self.saveSettings)
-        layout.addWidget(saveButton, 5, 0, 1, 2)
-
-        self.setLayout(layout)
-    
-    def _refreshSettings(self):
-        self.unhideTimersButton.setChecked(self.creator.config["General"]["unhide_timers"] == "true")
-        self.debugModeButton.setChecked(self.creator.config["General"]["preview"] == "true")
-    
-    def _saveSettings(self):
-        self.creator.config["General"]["unhide_timers"] = str(self.unhideTimersButton.isChecked()).lower()
-        self.creator.config["General"]["preview"] = str(self.debugModeButton.isChecked()).lower()
-
-class RegularTeaseCard(TeaseCard):
-    def __init__(self, creator, rootDir, defaultTeaseId = "unset", defaultThumb = DEFAULT_THUMB, configOverride=None):
-        super().__init__(creator, rootDir, defaultTeaseId, configOverride, RegularTeaseSettingsPopup)
-        self.loadThumbnail(defaultThumb)
+        self.debugModeButton = QtWidgets.QCheckBox(lang.debugMode, self)
+        self.layout_.addWidget(self.debugModeButton, 4, 0, 1, 2)
     
     def saveSettings(self):
-        self.saveConfig()
-        self.refreshMetadata()
+        # Need to use .lower() so that eos.outer.js can read it properly
+        self.creator.config["General"]["unhide_timers"] = str(self.unhideTimersButton.isChecked()).lower()
+        self.creator.config["General"]["preview"] = str(self.debugModeButton.isChecked()).lower()
+        return super().saveSettings()
     
-    def getThumbnail(self):
+    def refreshSettings(self):
+        self.unhideTimersButton.setChecked(self.creator.config["General"].getboolean("unhide_timers"))
+        self.debugModeButton.setChecked(self.creator.config["General"].getboolean("preview"))
+        return super().refreshSettings()
+
+class RegularTeaseCard(TeaseCard):
+    MY_FANCY_NAME = "Regular Tease Card"
+
+    def __init__(self, creator, rootDir):
+        super().__init__(creator, rootDir)
+        self.settingsPopup = RegularTeaseSettingsPopup(self)
+        if (thumbnail := self.getThumbnail()) is not None:
+            self.thumbnail.setPixmap(thumbnail)
+    
+    def getThumbnail(self) -> QtGui.QPixmap | None:
         with open(os.path.join(self.rootDir, "index.html")) as f:
-            htmlTree = BeautifulSoup(f)
+            htmlTree = BeautifulSoup(f, "html.parser")
+        # If I cannot chain far too many methods (in multiple lines) at once, this happens.
+        htmlTree = htmlTree.find("html", recursive=False)
+        htmlTree = htmlTree.find("body", recursive=False)
+        htmlTree = htmlTree.find("div", {"id": "cm_wide"})
         for link in htmlTree.find_all("img", src=True):
             if "timg/tb_xl" in link["src"]:
-                logging.debug(os.path.join(self.rootDir, link["src"]))
-                return QtGui.QPixmap(os.path.join(self.rootDir, link["src"]))
+                return self.cropThumbnail(QtGui.QPixmap(os.path.join(self.rootDir, link["src"])))
         return None
 
 class RegularTeaseSettingsPopup(TeaseSettingsPopup):
-    def __init__(self, creator: EosTeaseCard):
-        layout = QtWidgets.QGridLayout()
-        super().__init__(creator, layout)
-        
-        saveButton = QtWidgets.QPushButton(self)
-        saveButton.setText(lang.saveSettings)
-        saveButton.clicked.connect(self.saveSettings)
-        layout.addWidget(saveButton, 3, 0, 1, 2)
-
-        self.setLayout(layout)
-    
-    def _refreshSettings(self):
-        pass
-
-    def _saveSettings(self):
-        pass
+    pass

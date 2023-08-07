@@ -27,12 +27,41 @@ from cards import *
 from constants import *
 from eosHttpServer import MiloHTTPRequestHandler
 from stoppableThread import StoppableThread
+            
+def copyAll(src, dest, *files) -> list[str]:
+    failedFiles = list()
+    for file in files:
+        try:
+            if os.path.isdir(os.path.join(src, file)):
+                shutil.copytree(os.path.join(src, file), os.path.join(dest, file))
+            else:
+                shutil.copyfile(os.path.join(src, file), os.path.join(dest, file))
+        except Exception as e:
+            logging.error(e)
+            failedFiles.append(file)
+    return failedFiles
+
+def getNewRootDir() -> os.PathLike:
+    return os.path.join(TEASES_DIR, str(uuid.uuid4()))
+
+def startHttpServer(appWindow) -> HTTPServer:
+    httpd = HTTPServer((appWindow.config["General"]["ip"], int(appWindow.config["General"]["port"])), 
+                       functools.partial(MiloHTTPRequestHandler, directory=TEASES_DIR, commonDir=COMMON_DIR, appWindow=appWindow))
+    threading.Thread(target = httpd.serve_forever).start()
+    logging.info(f"Serving files on http://{appWindow.config['General']['ip']}:{appWindow.config['General']['port']}")
+    return httpd
+
+def stopHttpServer(httpd: HTTPServer):
+    httpd.shutdown()
+    # Frees the socket
+    httpd.server_close()
 
 class AppWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(lang.windowTitle % VERSION)
         self.setMinimumSize(QtCore.QSize(4, 3) * WINDOW_SIZE)
+        self.resize(QtCore.QSize(8, 5) * WINDOW_SIZE)
         self.teases: dict[str, TeaseCard] = dict()
         self.selectedTease: TeaseCard = None
         self.config = configparser.ConfigParser()
@@ -42,7 +71,6 @@ class AppWindow(QtWidgets.QMainWindow):
         
         self.globalSettingsPopup = GlobalSettingsPopup(self)
         self.downloadTeasePopup = DownloadTeasePopup(self)
-        
         self.refreshIcon()
 
         layout = QtWidgets.QHBoxLayout()
@@ -53,7 +81,7 @@ class AppWindow(QtWidgets.QMainWindow):
         searchSubLayout = QtWidgets.QHBoxLayout()
 
         # TODO icon doesn't invert colors properly
-        searchIcon = QtGui.QIcon.fromTheme("system-search-symbolic", QtGui.QIcon(SEARCH_ICON))
+        searchIcon = QtGui.QIcon.fromTheme("system-search-symbolic", QtGui.QIcon(SEARCH_ICON_PATH))
         searchImage = QtWidgets.QLabel(self)
         searchImage.setPixmap(searchIcon.pixmap(QtCore.QSize(16, 16)))
         searchSubLayout.addWidget(searchImage)
@@ -64,29 +92,20 @@ class AppWindow(QtWidgets.QMainWindow):
 
         cardsSubLayout.addLayout(searchSubLayout)
 
-        # Need a second sublayout and widget so the cards don't expand vertically when
-        # the window is too big and don't get crushed when the window is too small.
-        # Adding stretch to  teaseListSubLayout doesn't work.
-        teaseScrollHackSubLayout = QtWidgets.QVBoxLayout()
-
-        # TODO make it not look weird when there's only one item left in the filter (Linux only)
         self.teaseListSubLayout = QtWidgets.QVBoxLayout()
 
         for teaseTup in self.loadTeases(TEASES_DIR):
             self.addTeaseToList(*teaseTup)
 
+        # Need to specify a stretch factor or else it'll try to "share" 
+        # with all the other widgets' default stretch factors of 0.
+        self.teaseListSubLayout.addStretch(1)
+
         teaseListWidget = QtWidgets.QWidget(self)
         teaseListWidget.setLayout(self.teaseListSubLayout)
 
-        teaseScrollHackSubLayout.addWidget(teaseListWidget)
-
-        teaseScrollHackSubLayout.addStretch()
-
-        teaseScrollHackWidget = QtWidgets.QWidget(self)
-        teaseScrollHackWidget.setLayout(teaseScrollHackSubLayout)
-
         teaseScroll = QtWidgets.QScrollArea(self)
-        teaseScroll.setWidget(teaseScrollHackWidget)
+        teaseScroll.setWidget(teaseListWidget)
         teaseScroll.setWidgetResizable(True)  # Default is False
         cardsSubLayout.addWidget(teaseScroll)
 
@@ -139,7 +158,8 @@ class AppWindow(QtWidgets.QMainWindow):
 
     def addTeaseToList(self, rootDir, tease: TeaseCard):
         self.teases[rootDir] = tease
-        self.teaseListSubLayout.addWidget(tease)
+        # Place the card before the stretch.
+        self.teaseListSubLayout.insertWidget(len(self.teaseListSubLayout) - 1, tease)
 
     def removeTeaseFromList(self, tease: TeaseCard):
         del self.teases[tease.rootDir]
@@ -164,7 +184,8 @@ class AppWindow(QtWidgets.QMainWindow):
     
     def showTeaseSettingsPopup(self):
         if self.selectedTease is not None:
-            self.selectedTease.showSettingsPopup()
+            self.selectedTease.settingsPopup.refreshSettings()
+            self.selectedTease.settingsPopup.show()
     
     def openTeaseInBrowser(self):
         if self.selectedTease is not None:
@@ -174,6 +195,10 @@ class AppWindow(QtWidgets.QMainWindow):
         if self.selectedTease is not None:
             pyperclip.copy(self.getTeaseUrl())
     
+    def getTeaseUrl(self):
+        # Sorry not sorry
+        return f"http://{self.config['General']['ip']}:{self.config['General']['port']}/{self.selectedTease.rootDir.removeprefix(TEASES_DIR).replace(os.path.sep, '/').lstrip('/')}"
+
     def openTeaseFolder(self):
         fileManagerMap = {
             "Windows": "explorer.exe",
@@ -187,18 +212,17 @@ class AppWindow(QtWidgets.QMainWindow):
         rootDir = QtWidgets.QFileDialog.getExistingDirectory(self, lang.fileSelectTease)
         if rootDir == "":
             logging.debug("Canceled when importing tease from EOS at file picker.")
-        else:
-            newRootDir = getNewRootDir()
-            logging.info(f"Importing Tease from {rootDir} to {newRootDir}")
-            os.mkdir(newRootDir)
-            copyAll(rootDir, newRootDir, "tease", "timg", "config.ini", "eosscript.json")
-            if (teaseId := os.path.basename(rootDir)).isdigit():
-                teaseCard = EosTeaseCard(self, newRootDir, defaultTeaseId=teaseId)
-                teaseCard.saveSettings()
-                self.addTeaseToList(newRootDir, teaseCard)
-            else:
-                self.addTeaseToList(newRootDir, EosTeaseCard(self, newRootDir))
-            logging.debug(teaseId)
+            return
+        newRootDir = getNewRootDir()
+        logging.info(f"Importing Tease from {rootDir} to {newRootDir}")
+        os.mkdir(newRootDir)
+        copyAll(rootDir, newRootDir, "tease", "timg", "config.ini", "eosscript.json")
+        teaseCard = EosTeaseCard(self, newRootDir)
+        if (teaseId := os.path.basename(rootDir)).isdigit():
+            teaseCard.config["General"]["tease_id"] = teaseId
+        logging.debug(teaseId)
+        teaseCard.saveSettings()
+        self.addTeaseToList(newRootDir, teaseCard)
     
     def showDownloadPopup(self):
         self.downloadTeasePopup.refreshSettings()
@@ -206,6 +230,7 @@ class AppWindow(QtWidgets.QMainWindow):
 
     def deleteTease(self):
         if self.selectedTease is not None:
+            logging.debug(f"Deleting {self.selectedTease.rootDir}")
             shutil.rmtree(self.selectedTease.rootDir)
             self.removeTeaseFromList(self.selectedTease)
             self.selectedTease = None
@@ -217,15 +242,18 @@ class AppWindow(QtWidgets.QMainWindow):
         
         teases = list()
         for folder in os.listdir(searchDir):
-            dir = os.path.join(searchDir, folder)
-            if not os.path.isdir(dir):
+            rootDir = os.path.join(searchDir, folder)
+            if not os.path.isdir(rootDir):
                 continue
-            if "config.ini" not in (ld := os.listdir(dir)):
+            if "config.ini" not in (ld := os.listdir(rootDir)):
                 continue
-            if "eosscript.json" in ld:
-                teases.append((dir, EosTeaseCard(self, dir)))
-            else:
-                teases.append((dir, RegularTeaseCard(self, dir)))
+            try:
+                if "eosscript.json" in ld:
+                    teases.append((rootDir, EosTeaseCard(self, rootDir)))
+                else:
+                    teases.append((rootDir, RegularTeaseCard(self, rootDir)))
+            except Exception as e:
+                logging.error(e)
         return teases
     
     def saveSettings(self):
@@ -238,10 +266,6 @@ class AppWindow(QtWidgets.QMainWindow):
             stopHttpServer(httpd)
             httpd = startHttpServer(self)
     
-    def getTeaseUrl(self):
-        # Sorry not sorry
-        return f"http://{self.config['General']['ip']}:{self.config['General']['port']}/{self.selectedTease.rootDir.removeprefix(TEASES_DIR).replace(os.path.sep, '/').lstrip('/')}"
-
     def refreshIcon(self):
         self.setWindowIcon(QtGui.QIcon(self.config["General"]["icon_path"]))
 
@@ -255,6 +279,7 @@ class GlobalSettingsPopup(QtWidgets.QDialog):
         self.iconPath = None
 
         layout = QtWidgets.QGridLayout(self)
+        self.setLayout(layout)
 
         ipTextBoxHint = QtWidgets.QLabel(self)
         ipTextBoxHint.setText(lang.ipTextBoxHint)
@@ -281,8 +306,6 @@ class GlobalSettingsPopup(QtWidgets.QDialog):
         saveButton.setText(lang.saveSettings)
         saveButton.clicked.connect(self.saveSettings)
         layout.addWidget(saveButton, 3, 0, 1, 2)
-
-        self.setLayout(layout)
     
     def refreshSettings(self):
         self.ipTextBox.setText(self.creator.config["General"]["ip"])
@@ -315,9 +338,10 @@ class DownloadTeasePopup(QtWidgets.QDialog):
         self.setModal(True)
         self.creator = creator
         self.downloadThread = None
-        self.downloadedTeases: list[tuple] = list()
+        self.toAdd: list[TeaseCard] = list()
 
         layout = QtWidgets.QVBoxLayout()
+        self.setLayout(layout)
 
         idTextBoxSubLayout = QtWidgets.QHBoxLayout()
         
@@ -340,8 +364,6 @@ class DownloadTeasePopup(QtWidgets.QDialog):
         
         self.downloadStatus = QtWidgets.QLabel(self)
         layout.addWidget(self.downloadStatus)
-
-        self.setLayout(layout)
     
     def refreshSettings(self):
         self.idTextBox.setText("")
@@ -358,19 +380,17 @@ class DownloadTeasePopup(QtWidgets.QDialog):
     def closeEvent(self, event):
         if self.downloadThread is not None:
             self.downloadThread.stop()
-        errors = []
-        for CardType, rootDir, config in self.downloadedTeases:
+        for rootDir in self.toAdd:
+            # Copied from AppWindow.loadTeases()
+            if "config.ini" not in (ld := os.listdir(rootDir)):
+                continue
             try:
-                teaseCard: TeaseCard = CardType(self.creator, rootDir, configOverride = config)
-                # config.ini is saved here so that if an error occurs while
-                # downloading, the tease won't get loaded on startup.
-                teaseCard.saveSettings()
-                self.creator.addTeaseToList(rootDir, teaseCard)
+                if "eosscript.json" in ld:
+                    self.creator.addTeaseToList(rootDir, EosTeaseCard(self.creator, rootDir))
+                else:
+                    self.creator.addTeaseToList(rootDir, RegularTeaseCard(self.creator, rootDir))
             except Exception as e:
-                errors.append(e)
-        self.downloadedTeases.clear()
-        if errors:
-            raise Exception(errors)
+                logging.error(e)
         return super().closeEvent(event)
     
     def downloadTease(self):
@@ -378,6 +398,7 @@ class DownloadTeasePopup(QtWidgets.QDialog):
             rootDir = getNewRootDir()
             logging.debug(f"Creating folder {rootDir} for downloading tease id {self.idTextBox.text()}.")
             os.makedirs(os.path.join(rootDir, "timg", "tb_xl"))
+
             if self.downloadThread.stopped():
                 logging.debug("Download Thread Stopping!")
                 return
@@ -389,6 +410,7 @@ class DownloadTeasePopup(QtWidgets.QDialog):
                 self.downloadStatus.setText(lang.downloadUnknownError)
                 logging.error(f"Error downloading metadata: {metaReq.status_code=}, {metaReq.reason=}")
                 return
+            
             if self.downloadThread.stopped():
                 logging.debug("Download Thread Stopping!")
                 return
@@ -409,13 +431,23 @@ class DownloadTeasePopup(QtWidgets.QDialog):
             if (eosTopBody := metaHtmlTree.find("body", {"class": "eosTopBody"})) is not None:
                 if self.idTextBox.text() != eosTopBody.attrs["data-tease-id"]:
                     raise ValueError("Metadata ID does not match entered ID")
-                
-                self.downloadEosTease(rootDir, self.idTextBox.text(), eosTopBody.attrs)
+                medias = self.downloadEosTease(rootDir, self.idTextBox.text(), eosTopBody.attrs)
             else:
                 if self.idTextBox.text() not in metaHtmlTree.find("head").find("title").contents[0]:
                     raise ValueError("Metadata ID does not match entered ID")
-                
-                self.downloadRegularTease(rootDir, self.idTextBox.text(), metaHtmlTree)
+                medias = self.downloadRegularTease(rootDir, self.idTextBox.text(), metaHtmlTree)
+
+            self.downloadStatus.setText(lang.downloadingMedia)
+            with threadiprocessing.Pool(MEDIA_THREADS) as threadPool:
+                res = threadPool.starmap_async(self.downloadMedia, medias)
+                while not res.ready():
+                    res.wait(1)
+                    if self.downloadThread.stopped():
+                        logging.debug("Download Thread Stopping!")
+                        return
+                    
+            self.toAdd.append(rootDir)
+            self.downloadStatus.setText(lang.downloadComplete)
         except (OSError, IOError):
             self.downloadStatus.setText(lang.downloadWriteError)
             raise
@@ -451,13 +483,15 @@ class DownloadTeasePopup(QtWidgets.QDialog):
             "author": author,
             "tease_id": teaseId
         }
+
+        with open(os.path.join(rootDir, "config.ini"), "w") as f:
+            RegularTeaseCard.saveConfig(config, f)
+
         if self.downloadThread.stopped():
             logging.debug("Download Thread Stopping!")
             return
-
-        nextLinks, medias = self.processHtml(teaseId, fpHtmlTree)
-        with open(os.path.join(rootDir, "index.html"), "w") as fp:
-            fp.write(str(fpHtmlTree))
+        
+        nextLinks, medias = self.saveHtml(rootDir, teaseId, fpHtmlTree, os.path.join(rootDir, "index.html"))
         
         self.downloadStatus.setText(lang.downloadingHtml)
         seenLinks = set()
@@ -467,56 +501,42 @@ class DownloadTeasePopup(QtWidgets.QDialog):
                 return
             
             nextLink = nextLinks.pop()
-            if nextLink[0] in seenLinks:
-                logging.debug(f"Skipping {nextLink[0]} because it was already downloaded.")
+            if nextLink in seenLinks:
+                logging.debug(f"Skipping {nextLink} because it was already downloaded.")
                 continue
+            else:
+                seenLinks.add(nextLink)
 
             logging.debug(f"Downloading {nextLink}")
-            pageReq = requests.get(nextLink[0])
+            pageReq = requests.get(nextLink[1])
             if pageReq.status_code != HTTPStatus.OK:
                 logging.warning(f"Error downloading html: {pageReq.status_code=}, {pageReq.reason=}")
                 continue
 
             pageHtmlTree = BeautifulSoup(pageReq.content.decode(), "html.parser")
-            nextLinks_, medias_ = self.processHtml(teaseId, pageHtmlTree)
-            nextLinks.update(nextLinks_)
-            medias.update(medias_)
             try:
-                with open(os.path.join(rootDir, nextLink[1]), "w") as np:
-                    np.write(str(pageHtmlTree))
+                nextLinks_, medias_ = self.saveHtml(rootDir, teaseId, pageHtmlTree, nextLink[0])
+                nextLinks.update(nextLinks_)
+                medias.update(medias_)
             except (OSError, IOError) as e:
-                logging.warning(f"Error writing file {os.path.join(rootDir, nextLink[1])}: {e}")
-            seenLinks.add(nextLink[0])
-        
-        with threadiprocessing.Pool(MEDIA_THREADS) as threadPool:
-            self.downloadStatus.setText(lang.downloadingMedia % "*")
-            res = threadPool.starmap_async(self.downloadMedia, 
-                                           map(lambda fp: (os.path.join(rootDir, fp), f"https://media.milovana.com/{fp}"), medias))
-            while not res.ready():
-                res.wait(1)
-                if self.downloadThread.stopped():
-                    logging.debug("Download Thread Stopping!")
-                    # Called automatically when using a context manager
-                    # threadPool.terminate()
-                    return
+                logging.warning(f"Error writing file {os.path.join(rootDir, nextLink[0])}: {e}")
 
-        self.downloadedTeases.append((RegularTeaseCard, rootDir, config))
-        self.downloadStatus.setText(lang.downloadComplete)
+        return medias
     
-    def processHtml(self, teaseId, htmlTree: BeautifulSoup):
-        def getPageUrl(page):
+    def saveHtml(self, rootDir, teaseId, htmlTree: BeautifulSoup, meFile):
+        def getPageFilename(page):
             return f"{'page'+page if page else 'index'}.html"
         
         def stripRemoteComponent(url):
             return urllib.parse.urlunparse(url._replace(netloc="", scheme=""))
-
-        nextLinks: set[tuple[str, str]] = set()  # remote filename, local filename
-        medias = set()  # relative filepath of file
         
         while (newRoot := htmlTree.find("html", recursive=False)) is not None:
             htmlTree = newRoot
+
+        # local filepath, remote url
+        nextLinks: set[tuple[str, str]] = set()
+        medias: set[tuple[str, str]] = set()
         
-        logging.debug(f"{type(htmlTree)=}")
         if (htmlHead := htmlTree.find("head", recursive=False)) is not None:
             if (cur := htmlHead.find("base", href=True, recursive=False)) is not None:
                 cur.decompose()
@@ -538,24 +558,30 @@ class DownloadTeasePopup(QtWidgets.QDialog):
                     cur.decompose()
                 
             if (cur := htmlBody.find("div", {"id": "tease_content"})) is not None and \
-                  (cur := cur.find("script", {"type": "text/javascript"})) is not None and \
-                  cur.string is not None:
-                slice_begin = cur.string.find("var link='") + len("var link='")
-                slice_end = cur.string.find("';", slice_begin)
+                  (cur := cur.find("script", {"type": "text/javascript"})) is not None:
+                search_begin = "var link='"
+                search_end = "';"
+
+                slice_begin = cur.string.find(search_begin) + len(search_begin)
+                slice_end = cur.string.find(search_end, slice_begin)
+
                 url = urllib.parse.urlparse(cur.string[slice_begin:slice_end])
                 qs = urllib.parse.parse_qs(url.query)
                 if url.hostname.endswith("milovana.com") and url.path == "/webteases/showtease.php":
                     if qs.get("id") and qs.get("id")[0] == teaseId and qs.get("p"):
                         if (page := qs.get("p")[0]).isdigit():
-                            newUrl = getPageUrl(page)
-                            nextLinks.add((f"https://milovana.com/webteases/showtease.php?id={teaseId}&p={page}#t", newUrl))
-                            cur.string = cur.string[:slice_begin] + newUrl + "#t" + cur.string[slice_end:]
+                            filename = getPageFilename(page)
+                            cur.string = cur.string[:slice_begin] + filename + "#t" + cur.string[slice_end:]
+                            nextLinks.add((
+                                os.path.join(rootDir, filename),
+                                f"https://milovana.com/webteases/showtease.php?id={teaseId}&p={page}#t"
+                            ))
                         else:
                             logging.warning(f"Found non-numeric page {page} for url {url}")
                     else:
-                        logging.debug(f"{url} didn't contain an id or p tag")
+                        logging.debug(f"{url} didn't contain an id or p tag in spacebar script")
                 else:
-                    logging.debug(f"{url} didn't match hostname or path")
+                    logging.debug(f"{url} didn't match hostname or path in spacebar script")
             else:
                 logging.debug(f"Couldn't find spacebar script")
         else:
@@ -567,12 +593,16 @@ class DownloadTeasePopup(QtWidgets.QDialog):
             if not (url.hostname is None or url.hostname.endswith("milovana.com")):
                 logging.debug(f"No hostname match for url {url} with hostname {url.hostname}")
                 continue
+
             if url.path == "/webteases/showtease.php":
                 if qs.get("id") and qs.get("id")[0] == teaseId and qs.get("p"):
                     if (page := qs.get("p")[0]).isdigit():
-                        newUrl = getPageUrl(page)
-                        nextLinks.add((f"https://milovana.com/webteases/showtease.php?id={teaseId}&p={page}#t", newUrl))
-                        link["href"] = newUrl + "#t"
+                        filename = getPageFilename(page)
+                        link["href"] = filename + "#t"
+                        nextLinks.add((
+                            os.path.join(rootDir, filename),
+                            f"https://milovana.com/webteases/showtease.php?id={teaseId}&p={page}#t"
+                        ))
                     else:
                         logging.debug(f"Non-numeric page: {page}")
                 else:
@@ -591,19 +621,26 @@ class DownloadTeasePopup(QtWidgets.QDialog):
             if not (url.hostname is None or url.hostname.endswith("milovana.com")):
                 logging.debug(f"No hostname match for img {url} with hostname {url.hostname}")
                 continue
+
             if url.path.startswith("/timg/"):
                 img, ext = os.path.splitext(url.path[url.path.rfind("/")+1:])
                 ext = ext[1:]
                 if img.isalnum() and ext.isalnum():
-                    newUrl = f"timg/tb_xl/{img}.{ext}"
-                    medias.add(newUrl)
-                    link["src"] = newUrl
+                    filename = f"timg/tb_xl/{img}.{ext}"
+                    link["src"] = filename
+                    medias.add((
+                        os.path.join(rootDir, filename),
+                        f"https://media.milovana.com/{filename}"
+                    ))
                 else:
                     logging.debug(f"Image isn't valid hash or ext: {img=}, {ext=}")
             elif url.path.startswith("/gx/"):
                 link["src"] = stripRemoteComponent(url._replace(path=url.path[1:]))
             else:
                 logging.debug(f"Uncaptured img: {url}")
+        
+        with open(meFile, "w") as p:
+            p.write(str(htmlTree))
         
         return (nextLinks, medias)
 
@@ -617,6 +654,10 @@ class DownloadTeasePopup(QtWidgets.QDialog):
                 "tease_id": metadata["data-tease-id"],
                 "author_id": metadata["data-author-id"]
             }
+
+            with open(os.path.join(rootDir, "config.ini"), "w") as f:
+                EosTeaseCard.saveConfig(config, f)
+
             if self.downloadThread.stopped():
                 logging.debug("Download Thread Stopping!")
                 return
@@ -630,83 +671,42 @@ class DownloadTeasePopup(QtWidgets.QDialog):
                 logging.error(f"{eosscriptReq.content=}")
                 logging.error(f"{eosscriptReq.reason=}")
                 return
+            
             eosscript = eosscriptReq.json()
             with open(os.path.join(rootDir, "eosscript.json"), "w") as jFile:
                 json.dump(eosscript, jFile)
+
             if self.downloadThread.stopped():
                 logging.debug("Download Thread Stopping!")
                 return
             
             logging.debug(f"Finding media for {teaseId}.")
-            toDownload: dict[str, set[str]] = {"image/jpeg": set()}
+            mime2PathMap = {
+                "audio/mpeg": "timg/%s.mp3",
+                "image/jpeg": "timg/tb_xl/%s.jpg"
+            }
+            medias: set[tuple[str, str]] = set()
             if "galleries" in eosscript:
-                toDownload["image/jpeg"].update({image["hash"] for gallery in eosscript["galleries"].values() for image in gallery["images"]})
+                medias.update({
+                    (os.path.join(rootDir, (file := mime2PathMap["image/jpeg"] % image["hash"])),
+                     f"https://media.milovana.com/{file}")
+                    for gallery in eosscript["galleries"].values()
+                    for image in gallery["images"]
+                })
             if "files" in eosscript:
-                for file in eosscript["files"].values():
-                    if file["type"] not in toDownload:
-                        toDownload[file["type"]] = set()
-                    toDownload[file["type"]].add(file["hash"])
+                for f in eosscript["files"].values():
+                    medias.add((os.path.join(rootDir, (file := mime2PathMap[f["type"]] % f["hash"])),
+                                f"https://media.milovana.com/{file}"))
+                    
             if self.downloadThread.stopped():
                 logging.debug("Download Thread Stopping!")
                 return
             
-            filePathMap = {
-                "audio/mpeg": "timg/%s.mp3",
-                "image/jpeg": "timg/tb_xl/%s.jpg"
-            }
-            with threadiprocessing.Pool(MEDIA_THREADS) as threadPool:
-                for mimetype, fileHashes in toDownload.items():
-                    if mimetype not in filePathMap:
-                        logging.warning(f"Unrecognized mimetype {mimetype} for files {fileHashes}")
-                        continue
-                    urlTemplate = "https://media.milovana.com/" + filePathMap[mimetype]
-                    fileTemplate = os.path.normpath(os.path.join(rootDir, filePathMap[mimetype]))
-                    logging.debug(f"Downloading mimetype {mimetype} for {teaseId} using")
-                    logging.debug(f"url template {urlTemplate} and file template {fileTemplate}.")
-                    self.downloadStatus.setText(lang.downloadingMedia % mimetype)
-                    res = threadPool.starmap_async(self.downloadMedia, map(lambda h: (fileTemplate % h, urlTemplate % h), fileHashes))
-                    while not res.ready():
-                        res.wait(1)
-                        if self.downloadThread.stopped():
-                            logging.debug("Download Thread Stopping!")
-                            # Called automatically when using a context manager
-                            # threadPool.terminate()
-                            return
-
-            self.downloadedTeases.append((EosTeaseCard, rootDir, config))
-            self.downloadStatus.setText(lang.downloadComplete)
-        except requests.exceptions.JSONDecodeError as e:
+            return medias
+        except requests.exceptions.JSONDecodeError:
             self.downloadStatus.setText(lang.downloadJsonError)
             logging.error(f"An error occurred when decoding eosscript.json.")
             raise
-            
-def copyAll(src, dest, *files) -> list[str]:
-    failedFiles = list()
-    for file in files:
-        try:
-            if os.path.isdir(os.path.join(src, file)):
-                shutil.copytree(os.path.join(src, file), os.path.join(dest, file))
-            else:
-                shutil.copyfile(os.path.join(src, file), os.path.join(dest, file))
-        except Exception as e:
-            logging.error(e)
-            failedFiles.append(file)
-    return failedFiles
-
-def getNewRootDir():
-    return os.path.join(TEASES_DIR, str(uuid.uuid4()))
-
-def stopHttpServer(httpd):
-    httpd.shutdown()
-    # Frees the socket
-    httpd.server_close()
-
-def startHttpServer(appWindow):
-    httpd = HTTPServer((appWindow.config["General"]["ip"], int(appWindow.config["General"]["port"])), 
-                       functools.partial(MiloHTTPRequestHandler, directory=TEASES_DIR, commonDir=COMMON_DIR, appWindow=appWindow))
-    threading.Thread(target = httpd.serve_forever).start()
-    logging.info(f"Serving files on http://{appWindow.config['General']['ip']}:{appWindow.config['General']['port']}")
-    return httpd
 
 
 if __name__ == "__main__":

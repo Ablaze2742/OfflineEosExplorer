@@ -27,7 +27,7 @@ downloadInfo = "Enter the milovana URL's numeric ID and press Download."
 downloadComplete = "Download complete."
 downloadingMeta = "Downloading metadata..."
 downloadingScript = "Downloading eosscript.json..."
-downloadingMedia = "Downloading media type %s..."
+downloadingMedia = "Downloading media..."
 downloadingHtml = "Downloading HTML..."
 
 downloadInvalidId = "Invalid Tease ID."
