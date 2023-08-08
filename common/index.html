@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="user-scalable=0, initial-scale=1, minimum-scale=1, width=device-width, height=device-height">
+  <meta name="theme-color" content="#000000">
+  <title></title>
+  <link rel="icon" type="image/png" href="./icon.png?" />
+  <link rel="stylesheet" type="text/css" href="./style/eos.load.css?">
+  <script type="text/javascript" src="./script/jquery.min.js?"></script>
+  <script type="text/javascript" src="./script/eos.outer.js?_"></script>
+  <script>
+    var searchParams = new URLSearchParams(window.location.search)
+    if (!searchParams.has('_dt')){
+      searchParams.append('_dt', Date.now())
+    }
+  </script>
+</head>
+<body
+  class="eosTopBody"
+  data-tease-id="0"
+  data-title="TEASE_TITLE"
+  data-author-id="0"
+  data-author="TEASE_AUTHOR"
+  data-key=""
+  data-preview="false"
+  data-is-logged-in="false"
+>
+  <div id="eosRatingDialog" class="eosRatingDialog">
+    <div>
+      <div class="close">
+        &times;
+      </div>
+            <p class="message">
+        Choose your rating
+      </p>
+      <div class="stars">
+        <!--
+        <svg height="25" width="23" class="star rating" data-rating="1">
+          <polygon points="9.9, 1.1, 3.3, 21.78, 19.8, 8.58, 0, 8.58, 16.5, 21.78" style="fill-rule:nonzero;"/>
+        </svg>
+        <svg height="25" width="23" class="star rating" data-rating="2">
+          <polygon points="9.9, 1.1, 3.3, 21.78, 19.8, 8.58, 0, 8.58, 16.5, 21.78" style="fill-rule:nonzero;"/>
+        </svg>
+        <svg height="25" width="23" class="star rating" data-rating="3">
+          <polygon points="9.9, 1.1, 3.3, 21.78, 19.8, 8.58, 0, 8.58, 16.5, 21.78" style="fill-rule:nonzero;"/>
+        </svg>
+        <svg height="25" width="23" class="star rating" data-rating="4">
+          <polygon points="9.9, 1.1, 3.3, 21.78, 19.8, 8.58, 0, 8.58, 16.5, 21.78" style="fill-rule:nonzero;"/>
+        </svg>
+        <svg height="25" width="23" class="star rating" data-rating="5">
+          <polygon points="9.9, 1.1, 3.3, 21.78, 19.8, 8.58, 0, 8.58, 16.5, 21.78" style="fill-rule:nonzero;"/>
+        </svg>
+      -->
+      </div>
+          </div>
+  </div>
+  <iframe
+    class="eosIframe"
+    src="./eos.html"
+    allowfullscreen
+    ></iframe>
+</body>
+</html>
