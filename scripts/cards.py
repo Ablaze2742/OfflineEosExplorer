@@ -185,9 +185,9 @@ class EosTeaseCard(TeaseCard):
             self.thumbnail.setPixmap(thumbnail)
     
     def saveSettings(self):
-        super().saveSettings()
         self.eosscript = self.loadEosscript()
         logging.debug(f"Reloaded eosscript for {self.rootDir} with {self.config['General']['unhide_timers']=}")
+        return super().saveSettings()
     
     def loadEosscript(self) -> typing.Any:
         with open(os.path.join(self.rootDir, "eosscript.json")) as f:
@@ -272,15 +272,15 @@ class EosTeaseSettingsPopup(TeaseSettingsPopup):
         self.layout_.addWidget(self.debugModeButton, 4, 0, 1, 2)
     
     def saveSettings(self):
-        super().saveSettings()
         # Need to use .lower() so that eos.outer.js can read it properly
         self.creator.config["General"]["unhide_timers"] = str(self.unhideTimersButton.isChecked()).lower()
         self.creator.config["General"]["preview"] = str(self.debugModeButton.isChecked()).lower()
+        return super().saveSettings()
     
     def refreshSettings(self):
-        super().saveSettings()
         self.unhideTimersButton.setChecked(self.creator.config["General"].getboolean("unhide_timers"))
         self.debugModeButton.setChecked(self.creator.config["General"].getboolean("preview"))
+        return super().refreshSettings()
 
 class RegularTeaseCard(TeaseCard):
     MY_FANCY_NAME = "Regular Tease Card"
