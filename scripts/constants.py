@@ -2,7 +2,7 @@ from os.path import normpath
 #########################################################################
 ### DO NOT IMPORT ANY OTHER MODULES. THIS IS FOR BASIC METADATA ONLY! ###
 #########################################################################
-VERSION = 3.2
+VERSION = 3.3
 TEASES_DIR = normpath("teases")
 COMMON_DIR = normpath("common")
 DEFAULT_THUMB_PATH = normpath("icons/default_thumb.png")
